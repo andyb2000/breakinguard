@@ -1,0 +1,156 @@
+BREAKINGUARD by Andy Brown <andy @ thebmwz3 .co .uk>
+http://breakinguard.sourceforge.net/
+============================================================================
+Initial release: 05/05/2005
+============================================================================
+README
+This perl script is designed to be as small as possible and lightweight
+to minimise overhead on the server it is being run on.
+It will do an equivalent of 'tail -f' on the selected syslog and watch
+for certain messages to be found.
+Typical messages to watch for:
+	authentication failure
+	unknown user
+	invalid password
+When any of the key messages are found the script parses the line to obtain
+the IP address in question. This is then checked for repetition from the
+same IP address up to a user-definable limit.
+Once the limit is reached the script can then alert an admin via email,
+and (if set) can call iptables/ipchains to block the IP address in question.
+After a predetermined time, the blocked IP address can now be released from the block.
+
+It is recommended to run the script in DEBUG mode for as long as possible
+initially, to ensure the script is operating correctly and not blocking
+an excessive number of users/connections.
+============================================================================
+INSTALLATION
+
+An automated installer is in the form of the
+	./configure
+script. This will check perl modules are installed, then install the script
+to /usr/local/sbin/breakinguard
+
+You need to have a working/configured CPAN to check/install the two required
+modules.
+
+MANUAL INSTALLATION:
+
+To manually install, simply copy the main script to a system location, such as
+	/usr/local/sbin/breakinguard
+EDIT the script and modify the parameters at the top of the file to suit
+your situation:
+
+$alert_email="your\@email.com";
+
+Set alert_email to the address you want emailed upon a potential block.
+(Remember to put a backslash before an @ sign)
+
+$number_of_attempts=5;
+
+Set the number of attempts before a block/alert takes place.
+Do not set this too low, or genuine mistakes in passwords will result
+in a block.
+
+$log_to_watch="/var/log/messages";
+
+Set $log_to_watch to the syslog that we should monitor (full path)
+
+$block_command="/usr/sbin/iptables -A INPUT -s %s -j DROP";
+
+This is your iptables/ipchains block command. %s gets translated to
+the IP address.
+
+$sendmail_command="/usr/sbin/sendmail -t";
+
+This is your path/command for sendmail and any parameters needed.
+
+@patterns_to_find=("Failed password for illegal user", "Failed login for","authentication failure");
+
+You can modify this for your own purposes. An array of errors to match.
+
+$unblock_command="/usr/sbin/iptables -D INPUT -s %s -j DROP";
+
+The unblock command for your iptables/ipchains command. %s gets translated to
+the IP address.
+
+$blocked_dir="/var/run/breakinguard";
+
+This is a running directory used for storing blocked IP entries/runtime data
+(if it does not exist, will be automatically created)
+
+$block_length=60*60;
+
+This is the number of seconds to keep an IP address blocked for.
+
+$DEBUG=1;
+
+Set DEBUG to 1 to enable. This will print data to screen explaining the
+state of the program, and won't do the actual BLOCK commands, but will
+email.
+============================================================================
+RUNNING / EXECUTION
+
+Simply call the script (You may need to set it as executable first)
+	chmod 750 /usr/local/sbin/breakinguard
+Then run the script:
+	/usr/local/sbin/breakinguard &
+
+If you are in debug mode, omit the & (to skip putting the process into the
+background)
+
+You can also use the sysinit script which the installer creates:
+	/etc/rc.d/init.d/breakinguard start/stop/restart/status
+or
+	/etc/init.d/breakinguard start/stop/restart/status
+(depending on your system init script locations)
+
+Whilst in debug mode, tap CTRL-C to abort/exit the script.
+============================================================================
+Changelog
+============================================================================
+
+05/05/2005
+	Initial release
+18/06/2005
+	Fixed configure script bugs with IO::Socket
+	Changed iptables insert code to add blocks before any other rules in INPUT chain
+27/07/2005
+	Repackage for sourceforge release
+28/07/2005
+	Merged changes by Daniel (daniel @ automagic-software.com http://www.automagic-software.com/)
+	  - Timer for removing blocked hosts and RedHat init script
+	  - note, the init script may not work with your distribution! Contribs welcome!!
+11/08/2005
+	Modified main config to do syslogging (events logged at info level)
+	Also checking that user is root before starting main program run
+	Fixed configure script as it was incorrectly detecting users SysV init folders
+16/08/2005
+	Fixed a bug in some pattern matches, when no IP was detected, the script
+	still tried to carry on regardless.
+	Added some more debug output to aid problem solving
+	New support forums online: http://www.thebmwz3.co.uk/community/
+17/08/2005
+	Separated configuration from main script file (config is now /etc/breakinguard.conf) to allow for
+	easier upgrades, configuration changes
+	Tidied some core code up
+	NOTE: breakinguard now has 2 processes when listing process list. One for blocking/monitoring
+	log files, one for unblocking/timing.
+	Added new SSH login failure condition to pattern matching
+22/08/2005
+	Changed the stat/mtime call to be more compatible (some perl versions complained with the -> reference)
+	Fixed the init scripts to allow for non sysvinit style systems
+21/11/2005
+	Updated package environment, re-release via sourceforge
+05/02/2006
+	Updated to handle IPV6 headers on IP addresses, thanks to Rick/Scott and Jonathan.
+07/02/2006
+	Fixed bug in IPV6 header handling code from previous release, regex was incorrect
+24/04/2007
+	Added ability to use CIDR format IPs in safe_ips array
+	Modified installer to detect debian and use debian perl module packages instead of CPAN
+02/07/2007
+	Fixed the configure debian detection that failed on non-debian hosts
+	Also added several modules into the configure script
+08/01/2008
+	Added back the 'Invalid user' string, that somehow got lost somewhere back in time
+	As this is another common SSHD output

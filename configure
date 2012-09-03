@@ -1,0 +1,126 @@
+#!/bin/sh
+
+echo
+echo "=============================================="
+echo " Breakinguard configure/installer"
+echo "=============================================="
+echo
+
+PERL=`which perl 2>/dev/null`
+if [ \! -x $PERL ] ; then
+  echo "No executable perl ($PERL)"
+  echo "You must have perl installed to use this application"
+  echo
+  echo "Aborting..."
+  exit 1
+fi
+
+if [ "$UID" != "0" ]; then
+  echo -e "\033[40m\033[1;31mERROR: Root check FAILED (you MUST be root to use this script)!\033[0m"
+  exit 1
+fi
+
+APTGET=`which apt-get 2>/dev/null`
+
+echo "This script will check perl modules are in place (and install via CPAN if needed)"
+echo "Then will install the script to /usr/local/sbin/breakinguard"
+echo "and a default configuration into /etc/breakinguard.conf (if one already exists it will not be overwritten)"
+echo "Press CTRL-C to abort now if you do not want this...."
+echo "[5 second pause]"
+echo
+sleep 6
+
+echo "Starting configure/installation"
+echo
+
+if [ "x$APTGET" = "x" ] ; then
+	echo "Non-debian installation, using CPAN for perl modules"
+	echo
+	echo "Calling CPAN to install/update module File::Tail (if needed)"
+	$PERL -MCPAN -e "install File::Tail"
+	if [ $? -gt 1 ] ; then
+	   echo
+	   echo "ERROR: CPAN returned an error. Aborting install"
+	   echo
+	   exit 1
+	fi
+	sleep 2
+	echo "Calling CPAN to install/update module NetAddr::IP (if needed)"
+	$PERL -MCPAN -e "install NetAddr::IP"
+	if [ $? -gt 1 ] ; then
+           echo
+           echo "ERROR: CPAN returned an error. Aborting install"
+           echo
+	   exit 1
+        fi
+	echo "Calling CPAN to install/update module IO::Socket (if needed)"
+	$PERL -MCPAN -e "install IO::Socket"
+	if [ $? -gt 1 ] ; then
+	   echo
+	   echo "ERROR: CPAN returned an error. Ignoring as this fails often for some reason"
+	   echo
+	fi
+else
+	echo "Debian installation found, using apt-get to install perl modules"
+	echo
+	echo "aptget installing libfile-tail-perl"
+	$APTGET install libfile-tail-perl
+	echo
+	echo "aptget install libnetaddr-ip-perl"
+	$APTGET install libnetaddr-ip-perl
+	echo
+	echo "aptget install libio-interface-perl"
+	$APTGET install libio-interface-perl
+	echo
+fi
+
+
+sleep 2
+echo "Modules up to date. Installing script"
+echo " cp breakinguard /usr/local/sbin/breakinguard"
+cp breakinguard /usr/local/sbin/breakinguard
+echo "Setting permissions (750)"
+chmod 750 /usr/local/sbin/breakinguard
+echo
+sleep 2
+echo "Checking existing config file..."
+if [ -e "/etc/breakinguard.conf" ]; then
+	echo "Config already found at /etc/breakinguard.conf - PRESERVING"
+else
+	echo "Copying default config to /etc/breakinguard.conf"
+	cp breakinguard.conf /etc/breakinguard.conf
+	chown root /etc/breakinguard.conf
+	chmod 700 /etc/breakinguard.conf
+fi
+echo
+sleep 2
+echo "Creating sys init script (detecting your /etc/ structure)"
+
+if [ -d "/etc/init.d" ]; then
+	cp contrib/breakinguard /etc/init.d/breakinguard
+	chmod 755 /etc/init.d/breakinguard
+	echo "init script installed to: /etc/init.d/breakinguard"
+else
+	if [ -d "/etc/rc.d/init.d" ]; then
+		cp contrib/breakinguard /etc/rc.d/init.d/breakinguard
+		chmod 755 /etc/rc.d/init.d/breakinguard
+		echo "init script installed to: /etc/rc.d/init.d/breakinguard"
+	else
+		if [ -d "/etc/rc.d" ]; then
+			cp contrib/breakinguard /etc/rc.d/breakinguard
+			chmod 755 /etc/rc.d/breakinguard
+			echo "init script installed to: /etc/rc.d/breakinguard"
+		else
+			echo "Cannot determine init folder. Manually copy contrib/breakinguard to your init folder"
+			echo
+		fi
+	fi
+fi
+
+echo
+echo
+sleep 2
+echo "Make sure you edit /etc/breakinguard.conf to verify configuration"
+echo "  http://breakinguard.sourceforge.net/"
+echo
+echo

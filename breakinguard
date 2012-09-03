@@ -1,0 +1,279 @@
+#!/usr/bin/perl
+
+##  http://breakinguard.sourceforge.net   by Andy Brown
+################################################################################################
+
+
+## configs now moved to system location /etc/breakinguard.conf
+
+print "\nBreakinguard  http://breakinguard.sourceforge.net\n";
+
+@patterns_to_find=("Failed password for illegal user", "Failed login for","authentication failure","Failed none for invalid user","Failed password for invalid user","Illegal user","Invalid user");
+if (-e "/etc/breakinguard.conf") {
+	do "/etc/breakinguard.conf";
+	print "using /etc/breakinguard.conf configuration file\n";
+} elsif(-e "breakinguard.conf") {
+	do "breakinguard.conf";
+	print "using (local) breakinguard.conf configuration file\n";
+} else {
+	die("Failed to open /etc/breakinguard.conf or breakingaurd.conf - Ensure this file exists\n");
+};
+
+### end of configuration
+### main code
+
+if ($> ne 0) {
+	print "FAILURE - You must be logged in as root to run 'breakinguard'\n\n";
+	exit(1);
+};
+
+if(! -e $blocked_dir) {
+	unless (!$DEBUG) { print "DEBUG: Making $blocked_dir\n";};
+	unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'Created $blocked_dir'");};
+	mkdir($blocked_dir);
+}
+
+use File::Tail;
+use IO::Socket;
+use NetAddr::IP;
+
+## convert any CIDR addresses into expanded forms
+@new_safe_ips=();
+
+foreach $tmp_safe (@safe_ips) {
+	if ($tmp_safe) {
+		## is this in CIDR notation?
+		if ($tmp_safe =~ m/\//){
+my $ip = new NetAddr::IP $tmp_safe;
+for my $netblock (NetAddr::IP::compact $ip)
+{
+    for (my $ip = $netblock->first;
+         $ip <= $netblock->last;
+         $ip++)
+    {
+	my @ip_parts = split /\//, $ip;
+	push(@new_safe_ips, $ip_parts[0]);
+    }
+}
+		} else {
+			push(@new_safe_ips, $tmp_safe);
+		};
+	};
+};
+@safe_ips=@new_safe_ips;
+
+$0="breakinguard";
+
+if(fork()==0) {
+	while(1) {
+		$now = time();
+
+		opendir(DIR, $blocked_dir);
+		@blocked = readdir(DIR);
+		closedir(DIR);
+
+		for(@blocked) {
+			next if $_ eq '.';
+			next if $_ eq '..';
+			
+			$addr = $_;
+			$date = (stat("$blocked_dir/$addr"))[9];
+			
+			if($now-$date>$block_length) {
+				## time to unblock the given IP address
+			
+				unless (!$DEBUG) { print "DEBUG: simulating unblock of $addr\n"; };
+
+				$unblock_tmp_command = $unblock_command;
+				$unblock_tmp_command =~ s/%s/$addr/g;
+				
+				unless (!$DEBUG) { print "( $unblock_tmp_command )\n"; } else {
+					unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'unblocking $addr'");};
+					$dounblock = `$unblock_tmp_command`;
+				}
+
+				unlink("$blocked_dir/$addr");
+			}
+		}
+
+		sleep 60
+	}
+	exit;
+}
+
+# @active_counter=();	## count the number of times we see an entry
+%active_counter;
+
+unless (!$DEBUG) {print "DEBUG: Debug mode is active - not actually blocking anything\n\n";};
+
+unless (!$DEBUG) {print "DEBUG: Watching $log_to_watch\n";};
+
+$file=File::Tail->new(name=>$log_to_watch, maxinterval=>30);
+
+unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'Started breakinguard'");};
+if (!$DEBUG) {print "breakinguard started\n\n";fork && exit;};
+
+if ($file) {
+	while (defined($line=$file->read)) {
+			## check if the line has any of the patterns_to_find
+			unless (!$DEBUG) {
+				my $now = localtime time;
+				print "DEBUG: $now Processing line\n";};
+			chomp($line);
+			foreach $pattern_watch (@patterns_to_find) {
+				if ($line =~ m/$pattern_watch/i) {
+					unless (!$DEBUG) {print "DEBUG: Matched a violation string (\$patterns_to_find)\n";};
+					pattern_returns($line);
+				};
+			};
+	};
+};
+
+sub pattern_returns {
+	($line_to_check) = @_;
+	unless (!$DEBUG) {print "DEBUG: checking line '$line_to_check'\n";};
+	## check for patterns against common daemons and syslog entries
+	## get the IP address or host and reverse
+	if ($line_to_check =~ m/authentication failure/) {
+		## SSH authentication message
+		@ssh_msg=split(/\=/,$line_to_check);
+		$ssh_ipentry=$ssh_msg[6];
+		@ssh_msg=split(/ /,$ssh_ipentry);
+		$ssh_ipentry=$ssh_msg[0];
+		$ip_address=$ssh_ipentry;
+		$ip_address =~ s/::ffff://g;
+		unless (!$DEBUG) {print "DEBUG: SSH failure $ip_address\n";};
+	};
+	if ($line_to_check =~ m/Failed password for/ || ($line_to_check =~ m/Failed password for invalid user/)) {
+		## SSH illegal user message
+		## May  4 14:56:45 plotinus sshd[3247]: Failed password for illegal user tomcat from 210.184.74.18 port 50466 ssh2
+		@ssh2_msg=split(/from/,$line_to_check);
+		@ssh2_ipentry=split(/port/,$ssh2_msg[1]);
+		$ip_address=$ssh2_ipentry[0];
+		$ip_address =~ s/::ffff://g;
+		$ip_address =~ s/ //g;
+		unless (!$DEBUG) {print "DEBUG: SSH(v2) failure $ip_address\n";};
+	};
+	## Illegal user kassam from 144.16.72.102
+	if ($line_to_check =~ m/Illegal user/ || ($line_to_check =~ m/Invalid user/)) {
+		@ssh2_msg=split(/from/,$line_to_check);
+                $ip_address=$ssh2_msg[1];
+		$ip_address =~ s/::ffff://g;
+                $ip_address =~ s/ //g;
+                unless (!$DEBUG) {print "DEBUG: SSH(v2) failure $ip_address\n";};
+	};
+	if ($line_to_check =~ m/Failed login for/) {
+		## teapop login failure
+		## May  5 07:59:46 cicero teapop[17088]: Failed login for mikeshannon [217.22.154.19] from m2w076.mail2web.com [168.144.108.76]
+		@teapop_msg=split(/from/,$line_to_check);
+		@teapop_ip=split(/\[/,$teapop_msg[1]);
+		@teapop_ip_clean=split(/\]/,$teapop_ip[0]);
+		$ip_address=$teapop_ip_clean[0];
+		$ip_address =~ s/::ffff://g;
+		$ip_address =~ s/ //g;
+		unless (!$DEBUG) {print "DEBUG: teapop failure $ip_address\n";};
+	};
+
+	if ($line_to_check =~ m/ftp(pam_unix)/) {
+		## FTP login failure
+		## May  5 09:25:00 cicero ftp(pam_unix)[18114]: authentication failure; logname= uid=0 euid=0 tty=/dev/ftpd18114 ruser= rhost=localhost.localdomain
+		@ftp_msg=split(/=/,$line_to_check);
+		$ftp_ip=$ftp_msg[6];
+		$ip_address=$ftp_ip;
+		$ip_address =~ s/::ffff://g;
+		$ip_address =~ s/ //g;
+		unless (!$DEBUG) {print "DEBUG: FTP failure $ip_address\n";};
+	};
+
+## make sure its an IP address, not a hostname/fqdn
+eval {
+if($ip_address) {
+($ipentry)=inet_ntoa((gethostbyname($ip_address))[4]);
+unless (!$DEBUG) {print "IP: $ipentry\n";};
+};
+if ($@ || (!$ipentry)) {
+	print "WARN: Could not map $ip_address\n";
+} else {
+## if its a safe_ip don't add it to the array
+$safe=0;
+foreach $tmp_safe (@safe_ips) {
+	if ($tmp_safe eq $ipentry) {
+		$safe=1;
+	};
+};
+if (!$safe) {
+	$active_counter{$ipentry}++;
+};
+};
+};
+block_administration();
+};
+
+sub block_administration {
+	## cycle through the active_counter array looking for the correct number of matches and then block
+	unless (!$DEBUG) {print "starting block_administration()\n";};
+
+foreach $a(keys %active_counter){
+if ($active_counter{$a}>1){
+	unless (!$DEBUG) {print "duplicate [$a] is [$active_counter{$a}]\n";};
+	if ($active_counter{$a} >= $number_of_attempts) {
+		## now check if its already blocked or not.. no need to block again!
+		$found=0;
+		unless (!$DEBUG) {print "checking for current blocks: $blocked_dir/$a\n";};
+		if(-e "$blocked_dir/$a") {
+			unless (!$DEBUG) {print "BLOCK already in place\n";};
+			$found = 1;
+		} else {
+			$found = 0;
+		};
+		if ($found eq 0) {
+		unless (!$DEBUG) {print "TRIGGERING SIMULATED BLOCK (we have had $number_of_attempts)\n";};
+		unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'BLOCKING $a'");};
+		$block_tmp_command=$block_command;
+		$block_tmp_command =~ s/%s/$a/g;
+		unless (!$DEBUG) {print "($block_tmp_command)\n";} else {
+			unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'BLOCKING $a'");};
+			my $doblock=`$block_tmp_command`;
+		};
+		alert_via_email($a,$line_to_check);
+
+		open(BLOCKED, ">$blocked_dir/$a");
+		print BLOCKED $line_to_check;
+		close(BLOCKED);
+
+                delete $active_counter{$a};
+		} else {
+			unless (!$DEBUG) {print "$a already blocked.. no need to block again\n";};
+			unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'already blocked [continued attack??] $a'");};
+		};
+	} else {
+		unless (!$DEBUG) {print "Not enough attempts (need $number_of_attempts) before block\n";};
+	};
+	$duplicates = ($duplicates+($active_counter{$a}-1));
+	unless (!$syslog) {system("logger -i -p info -t 'breakinguard' 'Logging $a ($active_counter{$a} / $number_of_attempts)'");};
+};
+}#end of foreach
+};
+
+sub alert_via_email {
+	($ipblocked,$logentry) = @_;
+
+	$hostname=`hostname -f`;
+	chomp($hostname);
+
+	## send administrative alert via email
+	open(SENDMAIL, "|$sendmail_command") or die "Cannot open $sendmail: $!";
+	print SENDMAIL "From: breakinguard\@$hostname\n";
+	print SENDMAIL "Reply-to: breakinguard\@$hostname\n";
+	print SENDMAIL "Subject: BREAKINGUARD : Blocked IP address alert\n";
+	print SENDMAIL "To: $alert_email\n";
+	print SENDMAIL "Content-type: text/plain\n\n";
+	print SENDMAIL "BreakinGuard has blocked an IP based on suspicious activity\n";
+	print SENDMAIL "Please review this server.\n";
+	print SENDMAIL "\nDetail:\n";
+	print SENDMAIL "Hostname: $hostname\n";
+	print SENDMAIL "IP Blocked: ".$ipblocked."\n";
+	print SENDMAIL "Last log entry that caused the block:\n".$logentry."\n";
+	print SENDMAIL "\n\n\nBREAKINGUARD\nhttp://breakinguard.sourceforge.net/\n";
+	close(SENDMAIL);
+};

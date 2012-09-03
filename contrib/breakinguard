@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# breakinguard  This shell script takes care of starting and stopping
+#               breakinguard.
+#
+# chkconfig: 345 50 50
+# description: A daemon to block machines that do nasty things
+#
+# processname: breakinguard
+
+# Source function library.
+test -r /etc/rc.d/init.d/functions && . /etc/rc.d/init.d/functions
+test -r /etc/rc.status && . /etc/rc.status
+
+if
+  [ -z "$rc_done" ]
+then
+  rc_done="Done."
+  rc_failed="Failed."
+  rc_skipped="Skipped."
+fi
+
+# Source networking configuration.
+if [ -f /etc/sysconfig/network ] ; then
+	test -r /etc/sysconfig/network && . /etc/sysconfig/network
+
+	# Check that networking is up.
+	[ ${NETWORKING} = "no" ] && exit 0
+fi
+
+[ -f /usr/local/sbin/breakinguard ] || exit 0
+
+if [ -f /etc/rc.d/init.d/functions ] ; then
+	. /etc/rc.d/init.d/functions
+else
+	daemon() {
+		exec $1;
+	};
+	killproc() {
+		killall $1;
+	};
+fi
+
+# See how we were called.
+case "$1" in
+  start)
+	# Start daemons.
+
+	echo -n "Starting breakinguard: "
+	daemon /usr/local/sbin/breakinguard
+	echo
+	touch /var/lock/subsys/breakinguard
+	;;
+  stop)
+	# Stop daemons.
+	echo -n "Shutting down breakinguard: "
+	killproc breakinguard
+	echo
+	rm -f /var/lock/subsys/breakinguard
+	;;
+  restart)
+	$0 stop
+	$0 start
+	;;
+  status)
+	status breakinguard
+	;;
+  *)
+	echo "Usage: breakinguard {start|stop|restart|status}"
+	exit 1
+esac
+
+exit 0
